@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -247,7 +248,7 @@ fun StepCards(
             viewModel.seedDbUri == null   -> "${viewModel.seedDbMap?.size} built-in seeds (tap to load a newer seeddb.bin)"
             else                          -> "${viewModel.seedDbMap?.size} seeds (built-in + your seeddb.bin)"
         },
-        icon        = Icons.Default.List,
+        icon        = Icons.AutoMirrored.Filled.List,
         isCompleted = seedsLoaded,
         enabled     = !viewModel.isProcessing,
         onClick     = { pickSeedDb.launch(arrayOf("*/*")) }
@@ -264,7 +265,7 @@ fun StepCards(
                 viewModel.ciaFileUri?.path?.split("/")?.lastOrNull() ?: "File selected"
             else                      -> "Select .cia or .3ds files (multi-select supported)"
         },
-        icon        = if (isBatch) Icons.Default.List else Icons.Default.Add,
+        icon        = if (isBatch) Icons.AutoMirrored.Filled.List else Icons.Default.Add,
         isCompleted = viewModel.ciaFileUri != null || isBatch,
         enabled     = !viewModel.isProcessing && ready,
         onClick     = { pickCiaFile.launch(arrayOf("*/*")) }

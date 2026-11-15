@@ -137,7 +137,6 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
             CryptoUtils.extractIconFromCia(
                 context  = getApplication(),
                 ciaUri   = uri,
-                seeds    = seedDbMap ?: emptyMap(),
                 keyStore = keyStore
             )
         }

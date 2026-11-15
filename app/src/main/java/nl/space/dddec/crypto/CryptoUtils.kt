@@ -43,17 +43,12 @@ object CryptoUtils {
 
     /**
      * Extracts game identity (icon + title + publisher) from a CIA file without
-     * performing the full decryption. Only the first content's data is processed.
-     *
-     * The CIA outer layer uses AES-CBC, which cannot be seeked into arbitrarily —
-     * you must decrypt from the beginning of each content block. This function
-     * does exactly that for Content 0 only, stopping as soon as the icon is found.
-     * The temp file written here is at most a few MB.
+     * performing the full decryption. Only content 0's NCCH header, ExeFS header and
+     * icon are decrypted, from a prefix of the file (at most 32 MB) copied to cache.
      */
     suspend fun extractIconFromCia(
         context: Context,
         ciaUri: Uri,
-        seeds: Map<Long, ByteArray>,
         keyStore: KeyStore
     ): Smdh? = withContext(Dispatchers.IO) {
         val tempFile = java.io.File(context.cacheDir, "preview.tmp")
@@ -80,7 +75,7 @@ object CryptoUtils {
 
                 val ticketBytes = ByteArray(header.ticketSize)
                     .also { raf.seek(header.getTicketOffset()); raf.readFully(it) }
-                val ticket = CiaParser.parseTicketFromBuffer(ByteBuffer.wrap(ticketBytes), header.ticketSize)
+                val ticket = CiaParser.parseTicketFromBuffer(ByteBuffer.wrap(ticketBytes))
 
                 val tmdBytes = ByteArray(header.tmdSize)
                     .also { raf.seek(header.getTmdOffset()); raf.readFully(it) }
@@ -94,16 +89,22 @@ object CryptoUtils {
                 val ciaEncrypted = isCiaEncrypted(content0)
                 val titleKey = if (ciaEncrypted) decryptTitleKey(ticket, keyStore) else null
                 val ciaIv = ciaContentIv(content0.index)
-                fun newCbc(): Cipher? = titleKey?.let { cbcDecryptCipher(it, ciaIv) }
-                fun Cipher?.dec(b: ByteArray, len: Int = b.size): ByteArray? =
-                    if (this == null) b.copyOf(len) else update(b, 0, len)
+                fun Cipher?.dec(b: ByteArray): ByteArray? = if (this == null) b else update(b)
 
-                // Decrypt Content 0's NCCH header
-                val cbcCipher = newCbc()
+                // CBC is self-synchronising: the IV for any block is the previous ciphertext
+                // block, so we can start decrypting at any offset instead of walking the stream.
+                fun cbcAt(relOff: Long): Cipher? {
+                    if (titleKey == null) return null
+                    if (relOff == 0L) return cbcDecryptCipher(titleKey, ciaIv)
+                    val prev = ByteArray(16)
+                    raf.seek(header.getContentOffset() + relOff - 16); raf.readFully(prev)
+                    return cbcDecryptCipher(titleKey, prev)
+                }
+
+                // Content 0's NCCH header
                 val encHdr = ByteArray(NCCH_HEADER_SIZE)
                     .also { raf.seek(header.getContentOffset()); raf.readFully(it) }
-                val decHdr = cbcCipher.dec(encHdr)
-                    ?: return@use null
+                val decHdr = cbcAt(0).dec(encHdr) ?: return@use null
 
                 val bbNcch = ByteBuffer.wrap(decHdr).order(ByteOrder.LITTLE_ENDIAN)
                 val magic = ByteArray(4).also { bbNcch.position(0x100); bbNcch.get(it) }
@@ -118,23 +119,8 @@ object CryptoUtils {
                 val normalKey2C  = if (flags7 and 0x01 != 0) ByteArray(16)
                 else deriveNormalKey("slot0x2CKeyX", originalKeyY, keyStore)
 
-                // Decrypt ExeFS header with CBC (CIA layer), then CTR (NCCH layer)
-                val exefsAbs    = header.getContentOffset() + exefsOff
-                val encExeHdr   = ByteArray(NCCH_HEADER_SIZE)
-                val encExeIv    = ByteArray(16) // The 16 bytes immediately before exefsAbs in CBC stream
-
-                // For CBC we must decrypt the entire stream from content start to exefsAbs.
-                // Reinit the cipher and walk through in chunks, keeping the last 16 bytes as IV.
-                // CBC is self-synchronising: the IV for any block is the previous ciphertext
-                // block, so we can seek directly instead of walking the whole stream.
-                fun cbcAt(relOff: Long): Cipher? {
-                    if (titleKey == null) return null
-                    if (relOff == 0L) return cbcDecryptCipher(titleKey, ciaIv)
-                    val prev = ByteArray(16)
-                    raf.seek(header.getContentOffset() + relOff - 16); raf.readFully(prev)
-                    return cbcDecryptCipher(titleKey, prev)
-                }
-
+                // ExeFS header: CBC (CIA layer), then CTR (NCCH layer)
+                val encExeHdr = ByteArray(NCCH_HEADER_SIZE)
                 raf.seek(header.getContentOffset() + exefsOff)
                 raf.readFully(encExeHdr)
                 val decExeHdrCia = cbcAt(exefsOff).dec(encExeHdr) ?: return@use null
@@ -219,7 +205,7 @@ object CryptoUtils {
             RandomAccessFile(tempInput, "r").use { rafIn ->
                 RandomAccessFile(tempOutput, "rw").use { rafOut ->
                     rafOut.setLength(0)
-                    decryptCiaLayer(rafIn, rafOut, seeds, keyStore, onStatusUpdate, onProgressUpdate)
+                    decryptCiaLayer(rafIn, rafOut, keyStore, onStatusUpdate, onProgressUpdate)
                 }
             }
 
@@ -436,7 +422,6 @@ object CryptoUtils {
     private fun decryptCiaLayer(
         rafIn: RandomAccessFile,
         rafOut: RandomAccessFile,
-        seeds: Map<Long, ByteArray>,
         keyStore: KeyStore,
         onStatusUpdate: (String) -> Unit,
         onProgressUpdate: (Float) -> Unit
@@ -446,7 +431,7 @@ object CryptoUtils {
 
         val ticketBytes = ByteArray(header.ticketSize)
             .also { rafIn.seek(header.getTicketOffset()); rafIn.readFully(it) }
-        val ticket = CiaParser.parseTicketFromBuffer(ByteBuffer.wrap(ticketBytes), header.ticketSize)
+        val ticket = CiaParser.parseTicketFromBuffer(ByteBuffer.wrap(ticketBytes))
 
         val tmdBytes = ByteArray(header.tmdSize)
             .also { rafIn.seek(header.getTmdOffset()); rafIn.readFully(it) }
@@ -590,144 +575,144 @@ object CryptoUtils {
         onStatusUpdate: (String) -> Unit,
         onSmdhLoaded: (Smdh) -> Unit
     ): NcchResult {
-            val flags7 = ncch.flags[7].toInt() and 0xFF
+        val flags7 = ncch.flags[7].toInt() and 0xFF
 
-            if (flags7 and 0x04 != 0) {
-                onStatusUpdate("Content $idx: NCCH already plaintext.")
-                return NcchResult.ALREADY_PLAIN
+        if (flags7 and 0x04 != 0) {
+            onStatusUpdate("Content $idx: NCCH already plaintext.")
+            return NcchResult.ALREADY_PLAIN
+        }
+
+        // KeyY — seed-derived if required, otherwise from NCCH header signature
+        var keyYBytes = ncch.headerSigBytes
+        if (flags7 and 0x20 != 0) {
+            val seed = seeds[ncch.titleId]
+                ?: throw Exception(
+                    "Seed not found for title 0x${"%016X".format(ncch.titleId)}. " +
+                            "Load a seeddb.bin that contains it."
+                )
+            onStatusUpdate("Content $idx: seed found, deriving key...")
+            keyYBytes = deriveSeedKey(ncch.headerSigBytes, seed)
+        }
+
+        val originalKeyY = BigInteger(1, ncch.headerSigBytes)
+        val derivedKeyY  = BigInteger(1, keyYBytes)
+        val partitionId  = bb.order(ByteOrder.LITTLE_ENDIAN).getLong(0x108)
+
+        val exhdrSize = bb.getInt(0x180).toLong() and 0xFFFFFFFFL
+        val exefsOff  = (bb.getInt(0x1A0).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
+        val exefsSize = (bb.getInt(0x1A4).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
+        val romfsOff  = (bb.getInt(0x1B0).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
+        val romfsSize = (bb.getInt(0x1B4).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
+
+        // Key 2C always used for ExHeader + ExeFS header. Uses original (pre-seed) KeyY.
+        val normalKey2C = if (flags7 and 0x01 != 0) ByteArray(16)
+        else deriveNormalKey("slot0x2CKeyX", originalKeyY, keyStore)
+
+        // RomFS and .code use the crypto-method key. Uses seed-derived KeyY if applicable.
+        val cryptoMethod = ncch.flags[3].toInt() and 0xFF
+        val normalKey    = if (flags7 and 0x01 != 0) ByteArray(16)
+        else {
+            val keyXName = KEY_X_BY_CRYPTO_METHOD[cryptoMethod] ?: "slot0x2CKeyX"
+            deriveNormalKey(keyXName, derivedKeyY, keyStore)
+        }
+
+        // ExHeader + ACI (0x200 from NCCH base, total exhdrSize + 0x400 bytes)
+        if (exhdrSize > 0) {
+            val exhdrAbs   = contentPos + 0x200L
+            val totalBytes = exhdrSize + 0x400L
+            decryptCtrInPlace(raf, exhdrAbs, totalBytes, normalKey2C, makeIv(partitionId, 0x01))
+
+            // Sanity check: JumpID at ExHeader+0x1C8 should equal Program ID
+            val exhdrBuf = ByteArray(0x200).also { raf.seek(exhdrAbs); raf.readFully(it) }
+            val jumpId   = ByteBuffer.wrap(exhdrBuf, 0x1C8, 8).order(ByteOrder.LITTLE_ENDIAN).long
+            if (jumpId == ncch.titleId) {
+                onStatusUpdate("Content $idx: ExHeader decrypted OK (JumpID verified).")
+            } else {
+                onStatusUpdate(
+                    "Content $idx: WARNING — JumpID 0x${"${"%016X".format(jumpId)}"} " +
+                            "!= ProgramID 0x${"${"%016X".format(ncch.titleId)}"}. " +
+                            "Key or IV may be wrong."
+                )
             }
+        }
 
-            // KeyY — seed-derived if required, otherwise from NCCH header signature
-            var keyYBytes = ncch.headerSigBytes
-            if (flags7 and 0x20 != 0) {
-                val seed = seeds[ncch.titleId]
-                    ?: throw Exception(
-                        "Seed not found for title 0x${"%016X".format(ncch.titleId)}. " +
-                                "Load a seeddb.bin that contains it."
-                    )
-                onStatusUpdate("Content $idx: seed found, deriving key...")
-                keyYBytes = deriveSeedKey(ncch.headerSigBytes, seed)
-            }
+        // ExeFS
+        if (exefsSize > 0) {
+            val exefsAbs = contentPos + exefsOff
+            val ivExeFS  = makeIv(partitionId, 0x02)
 
-            val originalKeyY = BigInteger(1, ncch.headerSigBytes)
-            val derivedKeyY  = BigInteger(1, keyYBytes)
-            val partitionId  = bb.order(ByteOrder.LITTLE_ENDIAN).getLong(0x108)
+            // ExeFS header (always key 2C)
+            decryptCtrInPlace(raf, exefsAbs, 0x200, normalKey2C, ivExeFS)
 
-            val exhdrSize = bb.getInt(0x180).toLong() and 0xFFFFFFFFL
-            val exefsOff  = (bb.getInt(0x1A0).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
-            val exefsSize = (bb.getInt(0x1A4).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
-            val romfsOff  = (bb.getInt(0x1B0).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
-            val romfsSize = (bb.getInt(0x1B4).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
+            // Read decrypted ExeFS header to find icon and .code ranges
+            val hdrBuf = ByteArray(0x200).also { raf.seek(exefsAbs); raf.readFully(it) }
+            var codeStart = -1L
+            var codeEnd   = -1L
 
-            // Key 2C always used for ExHeader + ExeFS header. Uses original (pre-seed) KeyY.
-            val normalKey2C = if (flags7 and 0x01 != 0) ByteArray(16)
-            else deriveNormalKey("slot0x2CKeyX", originalKeyY, keyStore)
+            for (i in 0 until 10) {
+                val entryName = String(hdrBuf, i * 16, 8, Charsets.US_ASCII).trimEnd('\u0000')
+                val off = ByteBuffer.wrap(hdrBuf, i * 16 + 8,  4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+                val sz  = ByteBuffer.wrap(hdrBuf, i * 16 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
 
-            // RomFS and .code use the crypto-method key. Uses seed-derived KeyY if applicable.
-            val cryptoMethod = ncch.flags[3].toInt() and 0xFF
-            val normalKey    = if (flags7 and 0x01 != 0) ByteArray(16)
-            else {
-                val keyXName = KEY_X_BY_CRYPTO_METHOD[cryptoMethod] ?: "slot0x2CKeyX"
-                deriveNormalKey(keyXName, derivedKeyY, keyStore)
-            }
+                if (entryName == ".code") {
+                    codeStart = 0x200 + off
+                    codeEnd   = codeStart + ((sz + 0x1FF) and 0x1FF.inv())
+                }
 
-            // ExHeader + ACI (0x200 from NCCH base, total exhdrSize + 0x400 bytes)
-            if (exhdrSize > 0) {
-                val exhdrAbs   = contentPos + 0x200L
-                val totalBytes = exhdrSize + 0x400L
-                decryptCtrInPlace(raf, exhdrAbs, totalBytes, normalKey2C, makeIv(partitionId, 0x01))
-
-                // Sanity check: JumpID at ExHeader+0x1C8 should equal Program ID
-                val exhdrBuf = ByteArray(0x200).also { raf.seek(exhdrAbs); raf.readFully(it) }
-                val jumpId   = ByteBuffer.wrap(exhdrBuf, 0x1C8, 8).order(ByteOrder.LITTLE_ENDIAN).long
-                if (jumpId == ncch.titleId) {
-                    onStatusUpdate("Content $idx: ExHeader decrypted OK (JumpID verified).")
-                } else {
-                    onStatusUpdate(
-                        "Content $idx: WARNING — JumpID 0x${"${"%016X".format(jumpId)}"} " +
-                                "!= ProgramID 0x${"${"%016X".format(ncch.titleId)}"}. " +
-                                "Key or IV may be wrong."
-                    )
+                if (idx == 0 && entryName == "icon" && sz > 0) {
+                    val iconRelOff = 0x200 + off
+                    val iconAbs    = exefsAbs + iconRelOff
+                    val iconData   = ByteArray(sz.toInt()).also { raf.seek(iconAbs); raf.readFully(it) }
+                    val decIcon    = if (flags7 and 0x04 == 0) {
+                        val ivIcon = bigIntTo16Bytes(ivPlusBlocks(ivExeFS, iconRelOff / 16))
+                        ctrDecryptCipher(normalKey2C, ivIcon).doFinal(iconData)
+                    } else {
+                        iconData
+                    }
+                    try { onSmdhLoaded(SmdhParser.parse(decIcon)) } catch (_: Exception) {}
                 }
             }
 
-            // ExeFS
-            if (exefsSize > 0) {
-                val exefsAbs = contentPos + exefsOff
-                val ivExeFS  = makeIv(partitionId, 0x02)
-
-                // ExeFS header (always key 2C)
-                decryptCtrInPlace(raf, exefsAbs, 0x200, normalKey2C, ivExeFS)
-
-                // Read decrypted ExeFS header to find icon and .code ranges
-                val hdrBuf = ByteArray(0x200).also { raf.seek(exefsAbs); raf.readFully(it) }
-                var codeStart = -1L
-                var codeEnd   = -1L
-
-                for (i in 0 until 10) {
-                    val entryName = String(hdrBuf, i * 16, 8, Charsets.US_ASCII).trimEnd('\u0000')
-                    val off = ByteBuffer.wrap(hdrBuf, i * 16 + 8,  4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
-                    val sz  = ByteBuffer.wrap(hdrBuf, i * 16 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
-
-                    if (entryName == ".code") {
-                        codeStart = 0x200 + off
-                        codeEnd   = codeStart + ((sz + 0x1FF) and 0x1FF.inv())
-                    }
-
-                    if (idx == 0 && entryName == "icon" && sz > 0) {
-                        val iconRelOff = 0x200 + off
-                        val iconAbs    = exefsAbs + iconRelOff
-                        val iconData   = ByteArray(sz.toInt()).also { raf.seek(iconAbs); raf.readFully(it) }
-                        val decIcon    = if (flags7 and 0x04 == 0) {
-                            val ivIcon = bigIntTo16Bytes(ivPlusBlocks(ivExeFS, iconRelOff / 16))
-                            ctrDecryptCipher(normalKey2C, ivIcon).doFinal(iconData)
-                        } else {
-                            iconData
-                        }
-                        try { onSmdhLoaded(SmdhParser.parse(decIcon)) } catch (_: Exception) {}
-                    }
+            // ExeFS body — split at .code boundary if dual-key
+            if (codeStart != -1L) {
+                val preSize = codeStart - 0x200
+                if (preSize > 0) {
+                    decryptCtrInPlace(raf, exefsAbs + 0x200, preSize, normalKey2C,
+                        ivPlusBlocks(ivExeFS, 0x200 / 16))
                 }
-
-                // ExeFS body — split at .code boundary if dual-key
-                if (codeStart != -1L) {
-                    val preSize = codeStart - 0x200
-                    if (preSize > 0) {
-                        decryptCtrInPlace(raf, exefsAbs + 0x200, preSize, normalKey2C,
-                            ivPlusBlocks(ivExeFS, 0x200 / 16))
-                    }
-                    decryptCtrInPlace(raf, exefsAbs + codeStart, codeEnd - codeStart, normalKey,
-                        ivPlusBlocks(ivExeFS, codeStart / 16))
-                    val postSize = exefsSize - codeEnd
-                    if (postSize > 0) {
-                        decryptCtrInPlace(raf, exefsAbs + codeEnd, postSize, normalKey2C,
-                            ivPlusBlocks(ivExeFS, codeEnd / 16))
-                    }
-                } else {
-                    val bodySize = exefsSize - 0x200
-                    if (bodySize > 0) {
-                        decryptCtrInPlace(raf, exefsAbs + 0x200, bodySize, normalKey2C,
-                            ivPlusBlocks(ivExeFS, 0x200 / 16))
-                    }
+                decryptCtrInPlace(raf, exefsAbs + codeStart, codeEnd - codeStart, normalKey,
+                    ivPlusBlocks(ivExeFS, codeStart / 16))
+                val postSize = exefsSize - codeEnd
+                if (postSize > 0) {
+                    decryptCtrInPlace(raf, exefsAbs + codeEnd, postSize, normalKey2C,
+                        ivPlusBlocks(ivExeFS, codeEnd / 16))
                 }
-                onStatusUpdate("Content $idx: ExeFS decrypted.")
+            } else {
+                val bodySize = exefsSize - 0x200
+                if (bodySize > 0) {
+                    decryptCtrInPlace(raf, exefsAbs + 0x200, bodySize, normalKey2C,
+                        ivPlusBlocks(ivExeFS, 0x200 / 16))
+                }
             }
+            onStatusUpdate("Content $idx: ExeFS decrypted.")
+        }
 
-            // RomFS
-            if (romfsSize > 0) {
-                decryptCtrInPlace(raf, contentPos + romfsOff, romfsSize, normalKey,
-                    makeIv(partitionId, 0x03))
-                onStatusUpdate("Content $idx: RomFS decrypted.")
-            }
+        // RomFS
+        if (romfsSize > 0) {
+            decryptCtrInPlace(raf, contentPos + romfsOff, romfsSize, normalKey,
+                makeIv(partitionId, 0x03))
+            onStatusUpdate("Content $idx: RomFS decrypted.")
+        }
 
-            // NCCH header hashes (0x160 / 0x1C0 / 0x1E0) are computed over plaintext
-            // hash regions, so they remain valid after decryption — leave them untouched.
+        // NCCH header hashes (0x160 / 0x1C0 / 0x1E0) are computed over plaintext
+        // hash regions, so they remain valid after decryption — leave them untouched.
 
-            // Stamp NoCrypto flag: clear CryptoMethod (flags[3]) and Seed+FixedKey bits,
-            // set NoCrypto bit so emulators skip re-decryption
-            raf.seek(contentPos + 0x18B); raf.write(0x00)
-            raf.seek(contentPos + 0x18F); raf.write((flags7 and 0x21.inv()) or 0x04)
+        // Stamp NoCrypto flag: clear CryptoMethod (flags[3]) and Seed+FixedKey bits,
+        // set NoCrypto bit so emulators skip re-decryption
+        raf.seek(contentPos + 0x18B); raf.write(0x00)
+        raf.seek(contentPos + 0x18F); raf.write((flags7 and 0x21.inv()) or 0x04)
 
-            return NcchResult.DECRYPTED
+        return NcchResult.DECRYPTED
     }
 
     // --- TMD fix-ups ---

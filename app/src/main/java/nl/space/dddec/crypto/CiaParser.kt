@@ -58,10 +58,6 @@ object CiaParser {
      *   RSA-4096 : 4 + 0x200 + 0x3C = 0x240
      *   RSA-2048 : 4 + 0x100 + 0x3C = 0x140  ← most common in retail CIAs
      *   ECDSA    : 4 + 0x3C  + 0x40 = 0x80
-     *
-     * BUG HISTORY: a previous version returned 0x244/0x144/0x84 (4 bytes too large each).
-     * That caused every body-relative offset to be shifted by +4 bytes, leading to
-     * content_count reading as 0 and all content records being misaligned.
      */
     private fun getSignatureSize(bb: ByteBuffer): Int {
         bb.position(0)
@@ -85,7 +81,7 @@ object CiaParser {
      *   body+0x9C  : Title ID (8 bytes, Big Endian)
      *   body+0xB1  : Common Key Index (1 byte)
      */
-    fun parseTicketFromBuffer(bb: ByteBuffer, size: Int): Ticket {
+    fun parseTicketFromBuffer(bb: ByteBuffer): Ticket {
         val sigSize = getSignatureSize(bb)
         bb.order(ByteOrder.BIG_ENDIAN)
 

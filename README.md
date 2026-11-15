@@ -2,13 +2,12 @@
 
 *Declassify your CIAs.*
 
-An Android app that decrypts 3DS `.cia` files on-device and exports them as a decrypted
-`.cia` or `.cci`, for use with emulators such as Azahar.
+An Android app that decrypts 3DS games on-device, for use with emulators such as Azahar.
 
-- Strips the CIA (AES-CBC) layer and the NCCH (AES-CTR) layer in place
-- Supports seeded titles (via `seeddb.bin`) and New 3DS crypto methods
-- Batch mode for multiple files
-- Shows the game's icon and title before decrypting
+- Decrypts `.cia` files (to decrypted CIA, or CCI for base games) and `.3ds`/`.cci` cartridge images
+- Supports seeded titles and New 3DS crypto; a seed database is built in
+- Batch mode, with output files named after the game's own title
+- Updates and DLC get their own names, so they never overwrite the base game
 
 ## Keys are not included
 
@@ -31,21 +30,26 @@ for CIAs whose contents are encrypted with a title key.
 
 ## Usage
 
-1. Load `aes_keys.txt`: pick the file, or tap **Find it in a folder** and choose a folder
-   (your Azahar/Citra user folder, SD card root, ...). The app searches it for
-   `sysdata/aes_keys.txt`, `gm9/out/aes_keys.txt` and similar locations.
-2. A seed database (1,861 titles) is built in. Load your own `seeddb.bin` only if a newer seeded title is missing.
-3. Pick one or more `.cia` or `.3ds`/`.cci` files and a destination. CIAs can be saved as
-   decrypted CIA or converted to CCI (base games only); `.3ds`/`.cci` files are saved as
-   decrypted `.3ds`/`.cci`.
+1. Load `aes_keys.txt`, in one of three ways:
+   - **Find keys automatically**: allow file access once, and the app checks `Download/`,
+     `Azahar/sysdata/`, `citra-emu/sysdata/`, `gm9/out/` and SD cards each time it opens.
+   - **Search a folder instead**: pick a folder and the app searches it (no extra permission).
+   - Tap **Crypto Keys** and pick the file directly.
+2. Optionally load your own `seeddb.bin` if a newer seeded title is missing from the built-in one.
+3. Pick one or more `.cia`, `.3ds` or `.cci` files and a destination.
 
-Decryption needs free internal storage of roughly twice the input file size.
+Decrypting a CIA needs free internal storage of about twice the file size; a `.3ds` about once.
 
 ## Intended use
 
 Use this only with titles you own and have dumped yourself. Do not open issues
 asking for keys or game files.
 
+## References
+
+File formats and crypto are documented on [3dbrew](https://www.3dbrew.org/); Project_CTR's
+ctrtool and makerom were used as format references.
+
 ## Building
 
-Open in Android Studio, or run `./gradlew assembleDebug`.
+Open in Android Studio, or run `./gradlew assembleDebug`. Unit tests: `./gradlew testDebugUnitTest`.
