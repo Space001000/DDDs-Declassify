@@ -3,20 +3,19 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 3DS Dual Screens (Outlines) -->
-    <!-- Top Screen -->
+    <!-- Kept inside the 66dp adaptive-icon safe zone so round masks don't clip it. -->
+    <!-- Top screen -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="2.5"
-        android:pathData="M28,22h52v26h-52z" />
-    <!-- Bottom Screen -->
+        android:strokeWidth="3.5"
+        android:pathData="M37,30h34a3,3 0,0 1,3 3v17a3,3 0,0 1,-3 3h-34a3,3 0,0 1,-3 -3v-17a3,3 0,0 1,3 -3z" />
+    <!-- Bottom screen -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="2.5"
-        android:pathData="M35,54h38v22h-38z" />
-
-    <!-- Yellow Key (Overlay) - Scaled down to fit better -->
+        android:strokeWidth="3.5"
+        android:pathData="M42,57h24a3,3 0,0 1,3 3v14a3,3 0,0 1,-3 3h-24a3,3 0,0 1,-3 -3v-14a3,3 0,0 1,3 -3z" />
+    <!-- Keyhole in the top screen -->
     <path
         android:fillColor="#FFEB3B"
-        android:pathData="M55,34c-4.4,0 -8,3.6 -8,8c0,3.3 2,6.1 4.9,7.3l0,20.7l6,0l0,-5l-3,0l0,-3l3,0l0,-3l-3,0l0,-9.7c2.9,-1.2 4.9,-4 4.9,-7.3c0,-4.4 -3.6,-8 -8,-8zM54,46c-2.2,0 -4,-1.8 -4,-4s1.8,-4 4,-4s4,1.8 4,4s-1.8,4 -4,4z" />
+        android:pathData="M50,38.5a4,4 0,1 0,8 0a4,4 0,1 0,-8 0zM51.5,40h5l1.5,8h-8z" />
 </vector>
