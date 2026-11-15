@@ -16,5 +16,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DDDs-decryptor"
+rootProject.name = "DDDs-Declassify"
 include(":app")

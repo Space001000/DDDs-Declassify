@@ -49,7 +49,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         bundledSeeds = try {
             application.assets.open("seeddb.bin").use { SeedDbParser.parse(it) }
         } catch (e: Exception) {
-            android.util.Log.w("DDDsDecryptor", "Bundled seeddb.bin unavailable", e)
+            android.util.Log.w("DDDsDeclassify", "Bundled seeddb.bin unavailable", e)
             emptyMap()
         }
         seedDbMap = bundledSeeds.takeIf { it.isNotEmpty() }
@@ -191,7 +191,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
                 try {
                     nl.space.dddec.crypto.KeyFileFinder.find(getApplication(), treeUri)
                 } catch (e: Exception) {
-                    android.util.Log.w("DDDsDecryptor", "Key search failed", e)
+                    android.util.Log.w("DDDsDeclassify", "Key search failed", e)
                     null
                 }
             }
@@ -334,7 +334,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
             deleteOutput(output)
             throw e
         } catch (e: Exception) {
-            android.util.Log.e("DDDsDecryptor", "Decryption failed", e)
+            android.util.Log.e("DDDsDeclassify", "Decryption failed", e)
             deleteOutput(output)
             e.localizedMessage ?: e.javaClass.simpleName
         }

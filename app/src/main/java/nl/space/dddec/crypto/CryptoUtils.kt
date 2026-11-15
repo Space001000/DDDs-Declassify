@@ -173,7 +173,7 @@ object CryptoUtils {
                 null
             }
         } catch (e: Exception) {
-            android.util.Log.w("DDDsDecryptor", "Preview failed", e)
+            android.util.Log.w("DDDsDeclassify", "Preview failed", e)
             null
         } finally {
             tempFile.delete()
@@ -387,7 +387,7 @@ object CryptoUtils {
                 readIconFromNcch(raf, p0.offset, keyStore)
             }
         } catch (e: Exception) {
-            android.util.Log.w("DDDsDecryptor", "Cartridge preview failed", e)
+            android.util.Log.w("DDDsDeclassify", "Cartridge preview failed", e)
             null
         } finally {
             tempFile.delete()

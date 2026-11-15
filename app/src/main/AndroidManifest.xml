@@ -11,12 +11,12 @@
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.DDDsdecryptor">
+        android:theme="@style/Theme.DDDsDeclassify">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.DDDsdecryptor">
+            android:theme="@style/Theme.DDDsDeclassify">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
