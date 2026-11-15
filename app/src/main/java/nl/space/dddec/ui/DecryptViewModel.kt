@@ -40,7 +40,17 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
     var batchQueue         by mutableStateOf<List<Uri>>(emptyList())
     var currentBatchIndex  by mutableStateOf(0)
 
+    /** Seeds shipped in assets/seeddb.bin; a user-loaded seeddb is merged on top. */
+    private var bundledSeeds: Map<Long, ByteArray> = emptyMap()
+
     init {
+        bundledSeeds = try {
+            application.assets.open("seeddb.bin").use { SeedDbParser.parse(it) }
+        } catch (e: Exception) {
+            android.util.Log.w("DDDsDecryptor", "Bundled seeddb.bin unavailable", e)
+            emptyMap()
+        }
+        seedDbMap = bundledSeeds.takeIf { it.isNotEmpty() }
         loadPersistedUris()
     }
 
@@ -104,7 +114,8 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
                 prefs().edit().putString("seeddb_uri", uri.toString()).apply()
             }
             getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
-                seedDbMap = SeedDbParser.parse(input)
+                // User-supplied entries win over bundled ones (e.g. a newer seeddb).
+                seedDbMap = bundledSeeds + SeedDbParser.parse(input)
             }
             updateStatus()
         } catch (e: Exception) {
@@ -125,7 +136,8 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
                 "Keys loaded (${keyStore.keyCount}). Ready.\n" +
                         "Optional: load seeddb.bin for seeded titles."
             else ->
-                "Ready. Keys: ${keyStore.keyCount}  Seeds: ${seedDbMap?.size}"
+                "Ready. Keys: ${keyStore.keyCount}  Seeds: ${seedDbMap?.size}" +
+                        if (seedDbUri == null) " (built-in)" else ""
         }
     }
 

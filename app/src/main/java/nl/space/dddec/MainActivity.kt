@@ -178,8 +178,11 @@ fun StepCards(
     // Step 1b: SeedDB
     StepCard(
         title       = "2. Seed Database",
-        description = if (seedsLoaded) "${viewModel.seedDbMap?.size} entries loaded (seeddb.bin)"
-        else "Optional — needed for seeded titles (seeddb.bin)",
+        description = when {
+            !seedsLoaded                  -> "Optional — needed for seeded titles (seeddb.bin)"
+            viewModel.seedDbUri == null   -> "${viewModel.seedDbMap?.size} built-in seeds (tap to load a newer seeddb.bin)"
+            else                          -> "${viewModel.seedDbMap?.size} seeds (built-in + your seeddb.bin)"
+        },
         icon        = Icons.Default.List,
         isCompleted = seedsLoaded,
         enabled     = !viewModel.isProcessing,

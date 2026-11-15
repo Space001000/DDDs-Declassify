@@ -30,7 +30,7 @@ for CIAs whose contents are encrypted with a title key.
 ## Usage
 
 1. Load `aes_keys.txt`.
-2. Optionally load `seeddb.bin` (required for seeded titles).
+2. A seed database (1,861 titles) is built in. Load your own `seeddb.bin` only if a newer seeded title is missing.
 3. Pick one or more `.cia` files, choose CIA or CCI output, and pick a destination.
 
 Decryption needs free internal storage of roughly twice the input file size.

@@ -20,6 +20,7 @@ aes_keys.txt
 *.keys
 boot9*.bin
 seeddb.bin
+!app/src/main/assets/seeddb.bin
 
 # Game files
 *.cia
