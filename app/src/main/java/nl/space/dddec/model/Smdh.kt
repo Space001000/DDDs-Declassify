@@ -17,7 +17,10 @@ object SmdhParser {
         // We'll use English (index 1) if available, otherwise index 0.
         // Each title struct: 0x80 Short Desc, 0x100 Long Desc, 0x80 Publisher (UTF-16)
         
-        val titleOffset = 0x08 + 0x200 // English
+        // English first; region-locked titles (e.g. Japan-only) may only fill other languages.
+        val langOrder = listOf(1) + (0 until 16).filter { it != 1 }
+        val lang = langOrder.firstOrNull { readUtf16(bytes, 0x08 + it * 0x200, 0x80).isNotBlank() } ?: 1
+        val titleOffset = 0x08 + lang * 0x200
         val shortDesc = readUtf16(bytes, titleOffset, 0x80)
         val longDesc = readUtf16(bytes, titleOffset + 0x80, 0x100)
         val publisher = readUtf16(bytes, titleOffset + 0x180, 0x80)

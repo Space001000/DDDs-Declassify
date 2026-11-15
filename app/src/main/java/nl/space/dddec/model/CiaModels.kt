@@ -44,8 +44,31 @@ data class TmdContent(
 data class Tmd(
     val titleId: Long,
     val contentCount: Int,
-    val contents: List<TmdContent>
+    val contents: List<TmdContent>,
+    val titleVersion: Int = 0
 )
+
+/** Identity of a title, used to name output files so base games, updates and DLC never collide. */
+data class TitleInfo(val titleId: Long, val version: Int) {
+
+    enum class Kind { GAME, UPDATE, DLC, DEMO, SYSTEM, OTHER }
+
+    /** Upper 32 bits of the Title ID encode the title category. */
+    val kind: Kind get() = when ((titleId ushr 32).toInt()) {
+        0x00040000 -> Kind.GAME
+        0x0004000E -> Kind.UPDATE
+        0x0004008C -> Kind.DLC
+        0x00040002 -> Kind.DEMO
+        0x00040010, 0x0004001B, 0x00040030, 0x0004009B, 0x000400DB, 0x00040130, 0x00040138 -> Kind.SYSTEM
+        else       -> Kind.OTHER
+    }
+
+    /** Title version as shown on the console: major.minor.micro (6/6/4 bits). */
+    val versionString: String get() =
+        "${version shr 10}.${(version shr 4) and 0x3F}.${version and 0xF}"
+
+    val titleIdHex: String get() = "%016X".format(titleId)
+}
 
 data class NcchHeader(
     val titleId: Long,

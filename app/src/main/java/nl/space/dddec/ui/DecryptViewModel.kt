@@ -15,7 +15,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import nl.space.dddec.crypto.CiaParser
 import nl.space.dddec.crypto.CryptoUtils
+import nl.space.dddec.model.TitleInfo
 import nl.space.dddec.crypto.FileNameUtils
 import nl.space.dddec.crypto.KeyStore
 import nl.space.dddec.crypto.SeedDbParser
@@ -63,10 +65,75 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
 
     private fun updateSuggestedName() {
         val uri = ciaFileUri ?: return
-        val originalName = getFileName(uri) ?: "game.cia"
-        val baseName = FileNameUtils.cleanAndSuggest(originalName)
+        viewModelScope.launch {
+            val info = titleInfo(uri)
+            suggestedFileName = outputName(getFileName(uri) ?: "game.cia", info, romTitle(uri, info))
+            // romTitle() loaded the SMDH; reuse it for the icon/title preview.
+            if (ciaFileUri == uri) smdhCache[uri]?.let { currentSmdh = it }
+        }
+    }
+
+    // --- Embedded game title (SMDH) ---
+
+    private val smdhCache = mutableMapOf<Uri, nl.space.dddec.model.Smdh?>()
+
+    /** Game titles seen this session, keyed by the low 32 bits of the Title ID, which a base
+     *  game shares with its update and DLC. Lets updates/DLC (no icon of their own) borrow it. */
+    private val titleByUniqueId = mutableMapOf<Long, String>()
+
+    private fun uniqueId(info: TitleInfo) = info.titleId and 0xFFFFFFFFL
+
+    private suspend fun smdh(uri: Uri): nl.space.dddec.model.Smdh? {
+        if (smdhCache.containsKey(uri)) return smdhCache[uri]
+        val result = CryptoUtils.extractIconFromCia(
+            context  = getApplication(),
+            ciaUri   = uri,
+            seeds    = seedDbMap ?: emptyMap(),
+            keyStore = keyStore
+        )
+        // Don't cache a miss while keys are absent; it may succeed once keys load.
+        if (result != null || keyStore.isUsable) smdhCache[uri] = result
+        return result
+    }
+
+    /** Title embedded in the CIA, or the related base game's title; null falls back to the filename. */
+    private suspend fun romTitle(uri: Uri, info: TitleInfo?): String? {
+        val own = smdh(uri)?.shortDescription?.takeIf { it.isNotBlank() }
+        if (info != null) {
+            if (own != null && info.kind == TitleInfo.Kind.GAME) titleByUniqueId[uniqueId(info)] = own
+            if (own == null || info.kind != TitleInfo.Kind.GAME) {
+                titleByUniqueId[uniqueId(info)]?.let { return it }
+            }
+        }
+        return own
+    }
+
+    // --- Title identity (for naming and CCI eligibility) ---
+
+    private val titleInfoCache = mutableMapOf<Uri, TitleInfo?>()
+
+    private suspend fun titleInfo(uri: Uri): TitleInfo? {
+        if (titleInfoCache.containsKey(uri)) return titleInfoCache[uri]
+        val info = withContext(Dispatchers.IO) {
+            try {
+                getApplication<Application>().contentResolver.openInputStream(uri)
+                    ?.use { CiaParser.readTitleInfo(it) }
+            } catch (_: Exception) {
+                null
+            }
+        }
+        titleInfoCache[uri] = info
+        return info
+    }
+
+    /** CCI is a cartridge image: only meaningful for base games, never updates or DLC. */
+    private fun wantsCci(info: TitleInfo?) =
+        exportToCci && (info == null || info.kind == TitleInfo.Kind.GAME)
+
+    private fun outputName(originalName: String, info: TitleInfo?, romTitle: String?): String {
+        val baseName = FileNameUtils.cleanAndSuggest(originalName, info, romTitle)
             .removeSuffix(".cia").removeSuffix(".cci")
-        suggestedFileName = if (exportToCci) "$baseName.cci" else "$baseName.cia"
+        return if (wantsCci(info)) "$baseName.cci" else "$baseName.cia"
     }
 
     private fun loadPersistedUris() {
@@ -180,8 +247,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         if (uri != null) {
             updateSuggestedName()
             batchQueue = emptyList()
-            statusMessage = "CIA selected: ${getFileName(uri)}\nSuggested output: $suggestedFileName"
-            startPreview(uri)
+            statusMessage = "CIA selected: ${getFileName(uri)}"
         }
     }
 
@@ -195,19 +261,6 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
             currentBatchIndex = 0
             updateSuggestedName()
             statusMessage = "Batch selected: ${uris.size} files. Ready to process."
-            startPreview(uris[0])
-        }
-    }
-
-    private fun startPreview(uri: Uri) {
-        viewModelScope.launch {
-            val smdh = CryptoUtils.extractIconFromCia(
-                context  = getApplication(),
-                ciaUri   = uri,
-                seeds    = seedDbMap ?: emptyMap(),
-                keyStore = keyStore
-            )
-            if (smdh != null) currentSmdh = smdh
         }
     }
 
@@ -228,14 +281,17 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         progress     = 0f
 
         viewModelScope.launch {
-            val error = runDecrypt(input, output) { status -> statusMessage = status }
+            val cci = wantsCci(titleInfo(input))
+            val error = runDecrypt(input, output, cci) { status -> statusMessage = status }
             if (error != null) statusMessage = "Error: $error"
             isProcessing = false
         }
     }
 
     /** Runs one decryption. Returns null on success or an error message (partial output removed). */
-    private suspend fun runDecrypt(input: Uri, output: Uri, onStatus: (String) -> Unit): String? =
+    private suspend fun runDecrypt(
+        input: Uri, output: Uri, cci: Boolean, onStatus: (String) -> Unit
+    ): String? =
         try {
             CryptoUtils.decryptCia(
                 context          = getApplication(),
@@ -243,7 +299,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
                 destUri          = output,
                 seeds            = seedDbMap ?: emptyMap(),
                 keyStore         = keyStore,
-                convertToCci     = exportToCci,
+                convertToCci     = cci,
                 onStatusUpdate   = onStatus,
                 onProgressUpdate = { p -> progress = p },
                 onSmdhLoaded     = { smdh -> currentSmdh = smdh }
@@ -271,18 +327,26 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             val failures = mutableListOf<String>()
+
+            // Read base games' embedded titles first, so updates/DLC in the same batch
+            // are named after their game regardless of selection order.
+            statusMessage = "Reading game titles..."
+            for (uri in batchQueue) {
+                val info = titleInfo(uri)
+                if (info?.kind == TitleInfo.Kind.GAME) romTitle(uri, info)
+            }
+
             for (i in batchQueue.indices) {
                 currentBatchIndex = i
                 val inputUri = batchQueue[i]
                 ciaFileUri   = inputUri
                 currentSmdh  = null
 
-                startPreview(inputUri)
-
                 val originalName = getFileName(inputUri) ?: "game.cia"
-                val baseName = FileNameUtils.cleanAndSuggest(originalName)
-                    .removeSuffix(".cia").removeSuffix(".cci")
-                val finalName = if (exportToCci) "$baseName.cci" else "$baseName.cia"
+                val info      = titleInfo(inputUri)
+                val cci       = wantsCci(info)
+                val finalName = outputName(originalName, info, romTitle(inputUri, info))
+                currentSmdh   = smdh(inputUri)
 
                 statusMessage = "Processing batch (${i + 1}/${batchQueue.size}): $originalName"
 
@@ -295,7 +359,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
                     continue
                 }
 
-                val error = runDecrypt(inputUri, outUri) { status ->
+                val error = runDecrypt(inputUri, outUri, cci) { status ->
                     statusMessage = "Batch [${i + 1}/${batchQueue.size}] $status"
                 }
                 if (error != null) failures += "$originalName: $error"

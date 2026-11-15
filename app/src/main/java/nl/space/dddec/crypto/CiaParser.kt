@@ -96,6 +96,7 @@ object CiaParser {
         bb.order(ByteOrder.BIG_ENDIAN)
 
         val titleId      = bb.getLong(sigSize + 0x4C)
+        val titleVersion = bb.getShort(sigSize + 0x9C).toInt() and 0xFFFF
         val contentCount = bb.getShort(sigSize + 0x9E).toInt() and 0xFFFF
 
         val contentRecordsOffset = sigSize + 0x9C4
@@ -119,7 +120,29 @@ object CiaParser {
             contents.add(TmdContent(contentId, index, type, contentSize))
         }
 
-        return Tmd(titleId, contentCount, contents)
+        return Tmd(titleId, contentCount, contents, titleVersion)
+    }
+
+    /**
+     * Reads Title ID and version from the start of a CIA stream (header + certs + ticket + TMD;
+     * typically well under 64 KB). Returns null if the stream is not a parseable CIA.
+     */
+    fun readTitleInfo(input: java.io.InputStream): nl.space.dddec.model.TitleInfo? = try {
+        val dis = java.io.DataInputStream(input)
+        val hdr = ByteArray(0x20).also { dis.readFully(it) }
+        val header = parseHeaderFromBuffer(ByteBuffer.wrap(hdr))
+        val tmdEnd = header.getTmdOffset() + header.tmdSize
+        if (header.tmdSize <= 0 || tmdEnd > 4L * 1024 * 1024) null
+        else {
+            val prefix = ByteArray(tmdEnd.toInt())
+            System.arraycopy(hdr, 0, prefix, 0, hdr.size)
+            dis.readFully(prefix, hdr.size, prefix.size - hdr.size)
+            val tmdBytes = prefix.copyOfRange(header.getTmdOffset().toInt(), tmdEnd.toInt())
+            val tmd = parseTmdFromBuffer(ByteBuffer.wrap(tmdBytes), header.tmdSize)
+            nl.space.dddec.model.TitleInfo(tmd.titleId, tmd.titleVersion)
+        }
+    } catch (_: Exception) {
+        null
     }
 
     /**
