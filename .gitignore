@@ -1,0 +1,31 @@
+# Build output
+.gradle/
+build/
+app/build/
+.kotlin/
+*.apk
+*.aab
+*.iml
+*.hprof
+
+# Local configuration
+local.properties
+.idea/
+
+# Archives and old snapshots
+*.zip
+
+# Never commit key material or console dumps
+aes_keys.txt
+*.keys
+boot9*.bin
+seeddb.bin
+
+# Game files
+*.cia
+*.3ds
+*.cci
+
+# System files
+.DS_Store
+Thumbs.db
