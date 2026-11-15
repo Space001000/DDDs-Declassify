@@ -49,7 +49,12 @@ data class Tmd(
 )
 
 /** Identity of a title, used to name output files so base games, updates and DLC never collide. */
-data class TitleInfo(val titleId: Long, val version: Int) {
+data class TitleInfo(
+    val titleId: Long,
+    val version: Int,
+    /** True for .3ds/.cci cartridge images (NCSD) rather than CIAs. */
+    val isCartridge: Boolean = false
+) {
 
     enum class Kind { GAME, UPDATE, DLC, DEMO, SYSTEM, OTHER }
 

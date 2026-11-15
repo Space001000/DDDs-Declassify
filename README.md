@@ -33,7 +33,9 @@ for CIAs whose contents are encrypted with a title key.
    (your Azahar/Citra user folder, SD card root, ...). The app searches it for
    `sysdata/aes_keys.txt`, `gm9/out/aes_keys.txt` and similar locations.
 2. A seed database (1,861 titles) is built in. Load your own `seeddb.bin` only if a newer seeded title is missing.
-3. Pick one or more `.cia` files, choose CIA or CCI output, and pick a destination.
+3. Pick one or more `.cia` or `.3ds`/`.cci` files and a destination. CIAs can be saved as
+   decrypted CIA or converted to CCI (base games only); `.3ds`/`.cci` files are saved as
+   decrypted `.3ds`/`.cci`.
 
 Decryption needs free internal storage of roughly twice the input file size.
 

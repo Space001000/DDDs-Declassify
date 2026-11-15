@@ -85,12 +85,16 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun smdh(uri: Uri): nl.space.dddec.model.Smdh? {
         if (smdhCache.containsKey(uri)) return smdhCache[uri]
-        val result = CryptoUtils.extractIconFromCia(
-            context  = getApplication(),
-            ciaUri   = uri,
-            seeds    = seedDbMap ?: emptyMap(),
-            keyStore = keyStore
-        )
+        val result = if (titleInfo(uri)?.isCartridge == true) {
+            CryptoUtils.extractIconFromCartridge(getApplication(), uri, keyStore)
+        } else {
+            CryptoUtils.extractIconFromCia(
+                context  = getApplication(),
+                ciaUri   = uri,
+                seeds    = seedDbMap ?: emptyMap(),
+                keyStore = keyStore
+            )
+        }
         // Don't cache a miss while keys are absent; it may succeed once keys load.
         if (result != null || keyStore.isUsable) smdhCache[uri] = result
         return result
@@ -128,12 +132,20 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
 
     /** CCI is a cartridge image: only meaningful for base games, never updates or DLC. */
     private fun wantsCci(info: TitleInfo?) =
-        exportToCci && (info == null || info.kind == TitleInfo.Kind.GAME)
+        exportToCci && info?.isCartridge != true && (info == null || info.kind == TitleInfo.Kind.GAME)
 
     private fun outputName(originalName: String, info: TitleInfo?, romTitle: String?): String {
-        val baseName = FileNameUtils.cleanAndSuggest(originalName, info, romTitle)
-            .removeSuffix(".cia").removeSuffix(".cci")
-        return if (wantsCci(info)) "$baseName.cci" else "$baseName.cia"
+        val suggested = FileNameUtils.cleanAndSuggest(originalName, info, romTitle)
+        val baseName  = suggested.substringBeforeLast('.')
+        return when {
+            // Cartridge images stay cartridge images; keep .3ds or .cci as given.
+            info?.isCartridge == true -> {
+                val ext = suggested.substringAfterLast('.').lowercase()
+                "$baseName.${if (ext == "cci") "cci" else "3ds"}"
+            }
+            wantsCci(info) -> "$baseName.cci"
+            else           -> "$baseName.cia"
+        }
     }
 
     private fun loadPersistedUris() {
@@ -293,17 +305,30 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         input: Uri, output: Uri, cci: Boolean, onStatus: (String) -> Unit
     ): String? =
         try {
-            CryptoUtils.decryptCia(
-                context          = getApplication(),
-                ciaUri           = input,
-                destUri          = output,
-                seeds            = seedDbMap ?: emptyMap(),
-                keyStore         = keyStore,
-                convertToCci     = cci,
-                onStatusUpdate   = onStatus,
-                onProgressUpdate = { p -> progress = p },
-                onSmdhLoaded     = { smdh -> currentSmdh = smdh }
-            )
+            if (titleInfo(input)?.isCartridge == true) {
+                CryptoUtils.decryptCartridge(
+                    context          = getApplication(),
+                    inUri            = input,
+                    destUri          = output,
+                    seeds            = seedDbMap ?: emptyMap(),
+                    keyStore         = keyStore,
+                    onStatusUpdate   = onStatus,
+                    onProgressUpdate = { p -> progress = p },
+                    onSmdhLoaded     = { smdh -> currentSmdh = smdh }
+                )
+            } else {
+                CryptoUtils.decryptCia(
+                    context          = getApplication(),
+                    ciaUri           = input,
+                    destUri          = output,
+                    seeds            = seedDbMap ?: emptyMap(),
+                    keyStore         = keyStore,
+                    convertToCci     = cci,
+                    onStatusUpdate   = onStatus,
+                    onProgressUpdate = { p -> progress = p },
+                    onSmdhLoaded     = { smdh -> currentSmdh = smdh }
+                )
+            }
             null
         } catch (e: kotlinx.coroutines.CancellationException) {
             deleteOutput(output)

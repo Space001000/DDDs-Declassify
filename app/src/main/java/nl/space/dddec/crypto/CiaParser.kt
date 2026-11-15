@@ -10,6 +10,27 @@ import java.nio.ByteOrder
 
 object CiaParser {
 
+    /** True if [header] (at least 0x104 bytes from file start) is an NCSD (.3ds / .cci) image. */
+    fun isNcsd(header: ByteArray): Boolean =
+        header.size >= 0x104 && String(header, 0x100, 4, Charsets.US_ASCII) == "NCSD"
+
+    /** One NCCH partition inside an NCSD image, in bytes. */
+    data class NcsdPartition(val index: Int, val offset: Long, val size: Long)
+
+    /**
+     * Reads the NCSD partition table: 8 entries of (offset, size) in media units at 0x120.
+     * The media unit is 0x200 << flags[6] (flags at 0x188).
+     */
+    fun parseNcsdPartitions(header: ByteArray): List<NcsdPartition> {
+        val bb = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+        val mediaUnit = 0x200L shl (header[0x18E].toInt() and 0x0F)
+        return (0 until 8).mapNotNull { i ->
+            val off = (bb.getInt(0x120 + i * 8).toLong() and 0xFFFFFFFFL) * mediaUnit
+            val len = (bb.getInt(0x124 + i * 8).toLong() and 0xFFFFFFFFL) * mediaUnit
+            if (len > 0) NcsdPartition(i, off, len) else null
+        }
+    }
+
     fun parseHeaderFromBuffer(bb: ByteBuffer): CiaHeader {
         bb.order(ByteOrder.LITTLE_ENDIAN)
         return CiaHeader(
@@ -129,10 +150,14 @@ object CiaParser {
      */
     fun readTitleInfo(input: java.io.InputStream): nl.space.dddec.model.TitleInfo? = try {
         val dis = java.io.DataInputStream(input)
-        val hdr = ByteArray(0x20).also { dis.readFully(it) }
+        // 0x200 bytes covers both the CIA header (+bitmap start) and the NCSD header.
+        val hdr = ByteArray(0x200).also { dis.readFully(it) }
         val header = parseHeaderFromBuffer(ByteBuffer.wrap(hdr))
         val tmdEnd = header.getTmdOffset() + header.tmdSize
-        if (header.tmdSize <= 0 || tmdEnd > 4L * 1024 * 1024) null
+        if (isNcsd(hdr)) {
+            val mediaId = ByteBuffer.wrap(hdr).order(ByteOrder.LITTLE_ENDIAN).getLong(0x108)
+            nl.space.dddec.model.TitleInfo(mediaId, 0, isCartridge = true)
+        } else if (header.tmdSize <= 0 || tmdEnd > 4L * 1024 * 1024 || tmdEnd < hdr.size) null
         else {
             val prefix = ByteArray(tmdEnd.toInt())
             System.arraycopy(hdr, 0, prefix, 0, hdr.size)

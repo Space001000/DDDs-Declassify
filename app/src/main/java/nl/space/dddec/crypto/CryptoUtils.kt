@@ -263,6 +263,174 @@ object CryptoUtils {
         }
     }
 
+    // --- .3ds / .cci (NCSD cartridge image) ---
+
+    /**
+     * Decrypts a .3ds/.cci cartridge image. There is no CIA layer, ticket or TMD: each
+     * partition is a plain NCCH container, decrypted in place with the same NCCH logic.
+     * Needs ~1x the input size in cache (vs 2x for CIA).
+     */
+    suspend fun decryptCartridge(
+        context: Context,
+        inUri: Uri,
+        destUri: Uri,
+        seeds: Map<Long, ByteArray>,
+        keyStore: KeyStore,
+        onStatusUpdate: (String) -> Unit,
+        onProgressUpdate: (Float) -> Unit,
+        onSmdhLoaded: (Smdh) -> Unit = {}
+    ) = withContext(Dispatchers.IO) {
+        val work = java.io.File(context.cacheDir, "cci_work.tmp")
+        try {
+            context.contentResolver.openFileDescriptor(inUri, "r")?.use { pfd ->
+                val inputSize = pfd.statSize
+                val stats = android.os.StatFs(context.cacheDir.absolutePath)
+                val free  = stats.availableBlocksLong * stats.blockSizeLong
+                if (inputSize > 0 && free < inputSize) {
+                    throw Exception(
+                        "Not enough space in internal storage. " +
+                                "Need ${inputSize / 1024 / 1024} MB, have ${free / 1024 / 1024} MB."
+                    )
+                }
+            }
+
+            onStatusUpdate("Copying input to cache...")
+            context.contentResolver.openInputStream(inUri)?.use { src ->
+                work.outputStream().buffered(BUFFER_SIZE).use { src.copyTo(it, BUFFER_SIZE) }
+            } ?: throw Exception("Cannot open input file")
+            onProgressUpdate(0.2f)
+
+            RandomAccessFile(work, "rw").use { raf ->
+                val hdr = ByteArray(0x200).also { raf.seek(0); raf.readFully(it) }
+                if (!CiaParser.isNcsd(hdr)) throw Exception("Not a .3ds/.cci cartridge image (no NCSD header).")
+                val partitions = CiaParser.parseNcsdPartitions(hdr)
+                if (partitions.isEmpty()) throw Exception("Cartridge image has no partitions.")
+
+                val fileSize  = raf.length()
+                val totalSize = partitions.sumOf { it.size }
+                var done      = 0L
+                for (p in partitions) {
+                    onProgressUpdate(0.2f + done.toFloat() / totalSize * 0.7f)
+                    if (p.offset + 0x200 > fileSize) {
+                        onStatusUpdate("Partition ${p.index}: outside file (trimmed dump?), skipping.")
+                        continue
+                    }
+                    val ncchHdr = ByteArray(0x200).also { raf.seek(p.offset); raf.readFully(it) }
+                    val bb = ByteBuffer.wrap(ncchHdr).order(ByteOrder.LITTLE_ENDIAN)
+                    val ncch = try {
+                        CiaParser.parseNcchHeaderFromBuffer(bb)
+                    } catch (e: Exception) {
+                        onStatusUpdate("Partition ${p.index}: not a valid NCCH, leaving as-is.")
+                        done += p.size
+                        continue
+                    }
+                    onStatusUpdate("Partition ${p.index}: decrypting...")
+                    decryptNcchInPlace(
+                        raf, p.offset, ncch, bb, p.index, seeds, keyStore, onStatusUpdate, onSmdhLoaded
+                    )
+                    done += p.size
+                }
+                raf.channel.force(true)
+            }
+
+            onStatusUpdate("Writing output file...")
+            context.contentResolver.openFileDescriptor(destUri, "w")?.use { pfd ->
+                java.io.FileOutputStream(pfd.fileDescriptor).use { fos ->
+                    RandomAccessFile(work, "r").use { rafIn ->
+                        val channel = rafIn.channel
+                        val total   = channel.size()
+                        var pos     = 0L
+                        while (pos < total) {
+                            val n = channel.transferTo(pos, minOf(BUFFER_SIZE.toLong(), total - pos), fos.channel)
+                            if (n <= 0) break
+                            pos += n
+                            onProgressUpdate(0.9f + pos.toFloat() / total * 0.1f)
+                        }
+                    }
+                }
+            } ?: throw Exception("Cannot open output file")
+
+            onProgressUpdate(1.0f)
+            onStatusUpdate("Done! Fully decrypted file saved.")
+        } finally {
+            work.delete()
+        }
+    }
+
+    /** Reads icon + title from partition 0 of a .3ds/.cci image (plain NCCH, no CIA layer). */
+    suspend fun extractIconFromCartridge(
+        context: Context,
+        uri: Uri,
+        keyStore: KeyStore
+    ): Smdh? = withContext(Dispatchers.IO) {
+        val tempFile = java.io.File(context.cacheDir, "preview_cci.tmp")
+        try {
+            // Partition 0's header and ExeFS sit near the start of the image.
+            val prefixSize = 32L * 1024 * 1024
+            context.contentResolver.openInputStream(uri)?.use { s ->
+                tempFile.outputStream().buffered(BUFFER_SIZE).use { out ->
+                    val buf = ByteArray(BUFFER_SIZE)
+                    var copied = 0L
+                    while (copied < prefixSize) {
+                        val n = s.read(buf, 0, minOf(buf.size.toLong(), prefixSize - copied).toInt())
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        copied += n
+                    }
+                }
+            } ?: return@withContext null
+
+            RandomAccessFile(tempFile, "r").use { raf ->
+                val hdr = ByteArray(0x200).also { raf.readFully(it) }
+                if (!CiaParser.isNcsd(hdr)) return@use null
+                val p0 = CiaParser.parseNcsdPartitions(hdr).firstOrNull { it.index == 0 } ?: return@use null
+                readIconFromNcch(raf, p0.offset, keyStore)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("DDDsDecryptor", "Cartridge preview failed", e)
+            null
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    /** Reads the SMDH icon from an NCCH at [ncchPos] whose bytes are not CIA-encrypted. */
+    private fun readIconFromNcch(raf: RandomAccessFile, ncchPos: Long, keyStore: KeyStore): Smdh? {
+        val hdr = ByteArray(0x200).also { raf.seek(ncchPos); raf.readFully(it) }
+        val bb  = ByteBuffer.wrap(hdr).order(ByteOrder.LITTLE_ENDIAN)
+        val ncch = CiaParser.parseNcchHeaderFromBuffer(bb)
+        val flags7      = ncch.flags[7].toInt() and 0xFF
+        val noCrypto    = flags7 and 0x04 != 0
+        val partitionId = bb.getLong(0x108)
+        val exefsOff    = (bb.getInt(0x1A0).toLong() and 0xFFFFFFFFL) * MEDIA_UNIT
+        if (exefsOff == 0L) return null
+
+        val key2C = when {
+            noCrypto             -> null
+            flags7 and 0x01 != 0 -> ByteArray(16)
+            else                 -> deriveNormalKey("slot0x2CKeyX", BigInteger(1, ncch.headerSigBytes), keyStore)
+        }
+        val ivExeFS = makeIv(partitionId, 0x02)
+
+        val exeHdr = ByteArray(0x200).also { raf.seek(ncchPos + exefsOff); raf.readFully(it) }
+        val decExeHdr = key2C?.let { ctrDecryptCipher(it, bigIntTo16Bytes(ivExeFS)).doFinal(exeHdr) } ?: exeHdr
+
+        for (i in 0 until 10) {
+            val name = String(decExeHdr, i * 16, 8, Charsets.US_ASCII).trimEnd('\u0000')
+            if (name != "icon") continue
+            val off = ByteBuffer.wrap(decExeHdr, i * 16 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+            val sz  = ByteBuffer.wrap(decExeHdr, i * 16 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+            if (sz < 0x36C0) return null
+            val relOff = 0x200 + off
+            val data = ByteArray(sz.toInt()).also { raf.seek(ncchPos + exefsOff + relOff); raf.readFully(it) }
+            val dec = key2C?.let {
+                ctrDecryptCipher(it, bigIntTo16Bytes(ivPlusBlocks(ivExeFS, relOff / 16))).doFinal(data)
+            } ?: data
+            return SmdhParser.parse(dec)
+        }
+        return null
+    }
+
     // --- Stage 2: strip CIA AES-CBC layer ---
 
     private fun decryptCiaLayer(
@@ -386,14 +554,47 @@ object CryptoUtils {
                 return@forEachIndexed
             }
 
+            val result = decryptNcchInPlace(
+                raf, contentPos, ncch, bb, idx, seeds, keyStore, onStatusUpdate, onSmdhLoaded
+            )
+            if (result == NcchResult.ALREADY_PLAIN) {
+                markContentDecrypted(raf, header, idx, contentPos, content, rehash = false)
+            } else {
+                onStatusUpdate("Content $idx: Updating TMD hash...")
+                markContentDecrypted(raf, header, idx, contentPos, content, rehash = true)
+            }
+
+            totalDone += content.size
+            contentPos = align64(contentPos + content.size)
+        }
+
+        updateTmdInfoRecordHashes(raf, header)
+        raf.channel.force(true)
+    }
+
+    private enum class NcchResult { DECRYPTED, ALREADY_PLAIN }
+
+    /**
+     * Decrypts one NCCH container in place (ExHeader, ExeFS, RomFS) and stamps it NoCrypto.
+     * Shared by the CIA path (one NCCH per content) and the .3ds path (one per partition).
+     * [idx] 0 is the main game; its icon is reported through [onSmdhLoaded].
+     */
+    private fun decryptNcchInPlace(
+        raf: RandomAccessFile,
+        contentPos: Long,
+        ncch: nl.space.dddec.model.NcchHeader,
+        bb: ByteBuffer,
+        idx: Int,
+        seeds: Map<Long, ByteArray>,
+        keyStore: KeyStore,
+        onStatusUpdate: (String) -> Unit,
+        onSmdhLoaded: (Smdh) -> Unit
+    ): NcchResult {
             val flags7 = ncch.flags[7].toInt() and 0xFF
 
             if (flags7 and 0x04 != 0) {
                 onStatusUpdate("Content $idx: NCCH already plaintext.")
-                markContentDecrypted(raf, header, idx, contentPos, content, rehash = false)
-                contentPos = align64(contentPos + content.size)
-                totalDone += content.size
-                return@forEachIndexed
+                return NcchResult.ALREADY_PLAIN
             }
 
             // KeyY — seed-derived if required, otherwise from NCCH header signature
@@ -526,15 +727,7 @@ object CryptoUtils {
             raf.seek(contentPos + 0x18B); raf.write(0x00)
             raf.seek(contentPos + 0x18F); raf.write((flags7 and 0x21.inv()) or 0x04)
 
-            onStatusUpdate("Content $idx: Updating TMD hash...")
-            markContentDecrypted(raf, header, idx, contentPos, content, rehash = true)
-
-            totalDone += content.size
-            contentPos = align64(contentPos + content.size)
-        }
-
-        updateTmdInfoRecordHashes(raf, header)
-        raf.channel.force(true)
+            return NcchResult.DECRYPTED
     }
 
     // --- TMD fix-ups ---
