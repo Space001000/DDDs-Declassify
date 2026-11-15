@@ -103,6 +103,37 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Searches a user-picked folder (Azahar/Citra user folder, SD root, ...) for aes_keys.txt. */
+    fun onKeysFolderSelected(treeUri: Uri?) {
+        if (treeUri == null) return
+        statusMessage = "Searching for aes_keys.txt..."
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                try {
+                    nl.space.dddec.crypto.KeyFileFinder.find(getApplication(), treeUri)
+                } catch (e: Exception) {
+                    android.util.Log.w("DDDsDecryptor", "Key search failed", e)
+                    null
+                }
+            }
+            if (found == null) {
+                statusMessage = "No aes_keys.txt found in that folder.\n" +
+                        "Try your Azahar/Citra user folder or the SD card root, or pick the file directly."
+                return@launch
+            }
+            // Keep access to the folder so the found file can be reopened on next launch.
+            try {
+                getApplication<Application>().contentResolver.takePersistableUriPermission(
+                    treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                prefs().edit().putString("keys_uri", found.toString()).apply()
+            } catch (_: Exception) {
+                // Not persistable: keys still work for this session.
+            }
+            onKeysFileSelected(found, persist = false)
+        }
+    }
+
     fun onSeedDbSelected(uri: Uri?, persist: Boolean = true) {
         seedDbUri = uri
         if (uri == null) return

@@ -53,6 +53,10 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
         ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.onKeysFileSelected(uri) }
 
+    val pickKeysFolder = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> viewModel.onKeysFolderSelected(uri) }
+
     val pickSeedDb = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.onSeedDbSelected(uri) }
@@ -114,7 +118,8 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Spacer(Modifier.height(24.dp))
-                        StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest)
+                        StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest,
+                            onFindKeys = { pickKeysFolder.launch(null) })
                         Spacer(Modifier.height(24.dp))
                     }
                     Spacer(Modifier.width(24.dp))
@@ -138,7 +143,8 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Spacer(Modifier.height(24.dp))
-                    StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest)
+                    StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest,
+                        onFindKeys = { pickKeysFolder.launch(null) })
                     Spacer(Modifier.height(32.dp))
                     ProgressAndStatus(viewModel)
                     Spacer(Modifier.height(32.dp))
@@ -155,7 +161,8 @@ fun StepCards(
     pickSeedDb:   androidx.activity.result.ActivityResultLauncher<Array<String>>,
     pickCiaFile:  androidx.activity.result.ActivityResultLauncher<Array<String>>,
     createDestFile: androidx.activity.result.ActivityResultLauncher<String>,
-    pickBatchDest:  androidx.activity.result.ActivityResultLauncher<Uri?>
+    pickBatchDest:  androidx.activity.result.ActivityResultLauncher<Uri?>,
+    onFindKeys: () -> Unit = {}
 ) {
     val keysLoaded  = viewModel.keyStore.isUsable
     val seedsLoaded = viewModel.seedDbMap != null
@@ -166,12 +173,23 @@ fun StepCards(
     StepCard(
         title       = "1. Crypto Keys",
         description = if (keysLoaded) "${viewModel.keyStore.keyCount} keys loaded (aes_keys.txt)"
-        else "Required — dump from your 3DS with GodMode9",
+        else "Required — tap to pick aes_keys.txt",
         icon        = Icons.Default.Lock,
         isCompleted = keysLoaded,
         enabled     = !viewModel.isProcessing,
         onClick     = { pickKeysFile.launch(arrayOf("*/*")) }
     )
+
+    if (!keysLoaded) {
+        TextButton(
+            onClick  = onFindKeys,
+            enabled  = !viewModel.isProcessing
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text("Find it in a folder (Azahar, Citra, GodMode9, SD card)")
+        }
+    }
 
     Spacer(Modifier.height(12.dp))
 

@@ -29,7 +29,9 @@ for CIAs whose contents are encrypted with a title key.
 
 ## Usage
 
-1. Load `aes_keys.txt`.
+1. Load `aes_keys.txt`: pick the file, or tap **Find it in a folder** and choose a folder
+   (your Azahar/Citra user folder, SD card root, ...). The app searches it for
+   `sysdata/aes_keys.txt`, `gm9/out/aes_keys.txt` and similar locations.
 2. A seed database (1,861 titles) is built in. Load your own `seeddb.bin` only if a newer seeded title is missing.
 3. Pick one or more `.cia` files, choose CIA or CCI output, and pick a destination.
 
