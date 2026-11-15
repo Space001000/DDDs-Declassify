@@ -1,6 +1,6 @@
 # DDDs Declassify
 
-*Declassify your CIAs.* (A CIA is a "CTR Importable Archive"; FBI installs them. This app declassifies them.)
+*Declassify your CIAs.*
 
 An Android app that decrypts 3DS `.cia` files on-device and exports them as a decrypted
 `.cia` or `.cci`, for use with emulators such as Azahar.
