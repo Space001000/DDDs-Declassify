@@ -73,6 +73,41 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri -> viewModel.onDestinationSelected(uri) }
 
+    // Android 10 and lower: classic runtime storage permission.
+    val requestReadStorage = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { viewModel.onResumed() }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val allowFileAccess: () -> Unit = {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            // Android 11+: All files access is granted on a system settings screen.
+            val pkgUri = Uri.parse("package:${context.packageName}")
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, pkgUri
+            )
+            try {
+                context.startActivity(intent)
+            } catch (_: Exception) {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                )
+            }
+        } else {
+            requestReadStorage.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    // Re-check access and look for keys on every resume (e.g. back from the settings screen).
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.onResumed()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -119,7 +154,7 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
                     ) {
                         Spacer(Modifier.height(24.dp))
                         StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest,
-                            onFindKeys = { pickKeysFolder.launch(null) })
+                            onFindKeys = { pickKeysFolder.launch(null) }, onAllowFileAccess = allowFileAccess)
                         Spacer(Modifier.height(24.dp))
                     }
                     Spacer(Modifier.width(24.dp))
@@ -144,7 +179,7 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
                 ) {
                     Spacer(Modifier.height(24.dp))
                     StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest,
-                        onFindKeys = { pickKeysFolder.launch(null) })
+                        onFindKeys = { pickKeysFolder.launch(null) }, onAllowFileAccess = allowFileAccess)
                     Spacer(Modifier.height(32.dp))
                     ProgressAndStatus(viewModel)
                     Spacer(Modifier.height(32.dp))
@@ -162,7 +197,8 @@ fun StepCards(
     pickCiaFile:  androidx.activity.result.ActivityResultLauncher<Array<String>>,
     createDestFile: androidx.activity.result.ActivityResultLauncher<String>,
     pickBatchDest:  androidx.activity.result.ActivityResultLauncher<Uri?>,
-    onFindKeys: () -> Unit = {}
+    onFindKeys: () -> Unit = {},
+    onAllowFileAccess: () -> Unit = {}
 ) {
     val keysLoaded  = viewModel.keyStore.isUsable
     val seedsLoaded = viewModel.seedDbMap != null
@@ -181,13 +217,23 @@ fun StepCards(
     )
 
     if (!keysLoaded) {
+        if (!viewModel.hasFileAccess) {
+            TextButton(
+                onClick  = onAllowFileAccess,
+                enabled  = !viewModel.isProcessing
+            ) {
+                Icon(Icons.Default.Search, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Find keys automatically (allow file access)")
+            }
+        }
         TextButton(
             onClick  = onFindKeys,
             enabled  = !viewModel.isProcessing
         ) {
             Icon(Icons.Default.Search, contentDescription = null)
             Spacer(Modifier.width(6.dp))
-            Text("Find it in a folder (Azahar, Citra, GodMode9, SD card)")
+            Text("Search a folder instead")
         }
     }
 

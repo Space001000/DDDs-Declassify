@@ -56,6 +56,52 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         loadPersistedUris()
     }
 
+    // --- Automatic key discovery ---
+
+    /** True when the app may read shared storage directly (All files access on Android 11+). */
+    var hasFileAccess by mutableStateOf(false)
+        private set
+
+    private fun checkFileAccess(): Boolean =
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                getApplication(), android.Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+    /** Called whenever the screen resumes (also after returning from the permission screen). */
+    fun onResumed() {
+        hasFileAccess = checkFileAccess()
+        if (!keyStore.isUsable && hasFileAccess) autoFindKeys()
+    }
+
+    private fun autoFindKeys() {
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                try {
+                    nl.space.dddec.crypto.KeyFileFinder.findOnDisk()?.let { it to it.readText() }
+                } catch (e: Exception) {
+                    android.util.Log.w("DDDsDeclassify", "Auto key search failed", e)
+                    null
+                }
+            }
+            if (found == null) {
+                if (!keyStore.isUsable) statusMessage =
+                    "No aes_keys.txt found in Download, Azahar/Citra sysdata or gm9/out.\n" +
+                            "Pick the file manually instead."
+                return@launch
+            }
+            val (file, text) = found
+            val store = KeyStore.parse(text)
+            keysFileUri = Uri.fromFile(file)
+            keyStore = store
+            updateStatus()
+            if (store.isUsable) statusMessage = "Found keys automatically: ${file.path}\n$statusMessage"
+        }
+    }
+
     // --- Setup ---
 
     fun toggleExportFormat(isCci: Boolean) {
