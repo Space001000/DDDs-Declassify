@@ -52,3 +52,7 @@ ctrtool and makerom were used as format references.
 ## Building
 
 Open in Android Studio, or run `./gradlew assembleDebug`. Unit tests: `./gradlew testDebugUnitTest`.
+
+## License
+
+[GPL-3.0](LICENSE)
