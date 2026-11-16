@@ -30,13 +30,12 @@ for CIAs whose contents are encrypted with a title key.
 
 ## Usage
 
-1. Load `aes_keys.txt`, in one of three ways:
-   - **Find keys automatically**: allow file access once, and the app checks `Download/`,
-     `Azahar/sysdata/`, `citra-emu/sysdata/`, `gm9/out/` and SD cards each time it opens.
-   - **Search a folder instead**: pick a folder and the app searches it (no extra permission).
-   - Tap **Crypto Keys** and pick the file directly.
+1. Tap **Crypto Keys**. Allow file access and the app finds `aes_keys.txt` in `Download/`,
+   `Azahar/sysdata/`, `citra-emu/sysdata/`, `gm9/out/` or an SD card; or skip that and
+   pick the file yourself.
 2. Optionally load your own `seeddb.bin` if a newer seeded title is missing from the built-in one.
-3. Pick one or more `.cia`, `.3ds` or `.cci` files and a destination.
+3. Pick one or more `.cia`, `.3ds` or `.cci` files and a destination. Games are saved as `.cci`
+   by default; updates and DLC as `.cia`.
 
 Decrypting a CIA needs free internal storage of about twice the file size; a `.3ds` about once.
 

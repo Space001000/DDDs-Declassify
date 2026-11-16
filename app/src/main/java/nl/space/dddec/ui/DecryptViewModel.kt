@@ -32,7 +32,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
     var seedDbMap  by mutableStateOf<Map<Long, ByteArray>?>(null)
     var keyStore   by mutableStateOf(KeyStore.empty())
 
-    var exportToCci       by mutableStateOf(false)
+    var exportToCci       by mutableStateOf(true)
     var suggestedFileName by mutableStateOf("decrypted_game.cia")
     var statusMessage     by mutableStateOf("Load seeddb.bin to begin.")
     var isProcessing      by mutableStateOf(false)
@@ -62,6 +62,15 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
     var hasFileAccess by mutableStateOf(false)
         private set
 
+    /**
+     * The keys card first asks for file access so keys can be found automatically; after
+     * that (granted or not) it opens the file picker.
+     */
+    var fileAccessAsked = false
+
+    fun shouldAskForFileAccess(): Boolean =
+        !hasFileAccess && !fileAccessAsked && prefs().getString("keys_uri", null) == null
+
     private fun checkFileAccess(): Boolean =
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             android.os.Environment.isExternalStorageManager()
@@ -90,7 +99,7 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
             if (found == null) {
                 if (!keyStore.isUsable) statusMessage =
                     "No aes_keys.txt found in Download, Azahar/Citra sysdata or gm9/out.\n" +
-                            "Pick the file manually instead."
+                            "Tap Crypto Keys to pick it."
                 return@launch
             }
             val (file, text) = found
@@ -224,37 +233,6 @@ class DecryptViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Exception) {
             statusMessage = "Error loading keys file: ${e.localizedMessage}"
             if (!persist) prefs().edit().remove("keys_uri").apply()
-        }
-    }
-
-    /** Searches a user-picked folder (Azahar/Citra user folder, SD root, ...) for aes_keys.txt. */
-    fun onKeysFolderSelected(treeUri: Uri?) {
-        if (treeUri == null) return
-        statusMessage = "Searching for aes_keys.txt..."
-        viewModelScope.launch {
-            val found = withContext(Dispatchers.IO) {
-                try {
-                    nl.space.dddec.crypto.KeyFileFinder.find(getApplication(), treeUri)
-                } catch (e: Exception) {
-                    android.util.Log.w("DDDsDeclassify", "Key search failed", e)
-                    null
-                }
-            }
-            if (found == null) {
-                statusMessage = "No aes_keys.txt found in that folder.\n" +
-                        "Try your Azahar/Citra user folder or the SD card root, or pick the file directly."
-                return@launch
-            }
-            // Keep access to the folder so the found file can be reopened on next launch.
-            try {
-                getApplication<Application>().contentResolver.takePersistableUriPermission(
-                    treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-                prefs().edit().putString("keys_uri", found.toString()).apply()
-            } catch (_: Exception) {
-                // Not persistable: keys still work for this session.
-            }
-            onKeysFileSelected(found, persist = false)
         }
     }
 

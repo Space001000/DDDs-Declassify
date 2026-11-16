@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -53,10 +54,6 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
     val pickKeysFile = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.onKeysFileSelected(uri) }
-
-    val pickKeysFolder = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri -> viewModel.onKeysFolderSelected(uri) }
 
     val pickSeedDb = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -96,6 +93,16 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
             }
         } else {
             requestReadStorage.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    // First tap: ask for file access so the keys are found automatically. After that: file picker.
+    val onKeysTap: () -> Unit = {
+        if (viewModel.shouldAskForFileAccess()) {
+            viewModel.fileAccessAsked = true
+            allowFileAccess()
+        } else {
+            pickKeysFile.launch(arrayOf("*/*"))
         }
     }
 
@@ -155,7 +162,7 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
                     ) {
                         Spacer(Modifier.height(24.dp))
                         StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest,
-                            onFindKeys = { pickKeysFolder.launch(null) }, onAllowFileAccess = allowFileAccess)
+                            onKeysTap = onKeysTap)
                         Spacer(Modifier.height(24.dp))
                     }
                     Spacer(Modifier.width(24.dp))
@@ -180,7 +187,7 @@ fun MainScreen(viewModel: DecryptViewModel = viewModel()) {
                 ) {
                     Spacer(Modifier.height(24.dp))
                     StepCards(viewModel, pickKeysFile, pickSeedDb, pickCiaFile, createDestFile, pickBatchDest,
-                        onFindKeys = { pickKeysFolder.launch(null) }, onAllowFileAccess = allowFileAccess)
+                        onKeysTap = onKeysTap)
                     Spacer(Modifier.height(32.dp))
                     ProgressAndStatus(viewModel)
                     Spacer(Modifier.height(32.dp))
@@ -198,8 +205,7 @@ fun StepCards(
     pickCiaFile:  androidx.activity.result.ActivityResultLauncher<Array<String>>,
     createDestFile: androidx.activity.result.ActivityResultLauncher<String>,
     pickBatchDest:  androidx.activity.result.ActivityResultLauncher<Uri?>,
-    onFindKeys: () -> Unit = {},
-    onAllowFileAccess: () -> Unit = {}
+    onKeysTap: () -> Unit
 ) {
     val keysLoaded  = viewModel.keyStore.isUsable
     val seedsLoaded = viewModel.seedDbMap != null
@@ -210,33 +216,12 @@ fun StepCards(
     StepCard(
         title       = "1. Crypto Keys",
         description = if (keysLoaded) "${viewModel.keyStore.keyCount} keys loaded (aes_keys.txt)"
-        else "Required — tap to pick aes_keys.txt",
+        else "Required — tap to find aes_keys.txt",
         icon        = Icons.Default.Lock,
         isCompleted = keysLoaded,
         enabled     = !viewModel.isProcessing,
-        onClick     = { pickKeysFile.launch(arrayOf("*/*")) }
+        onClick     = onKeysTap
     )
-
-    if (!keysLoaded) {
-        if (!viewModel.hasFileAccess) {
-            TextButton(
-                onClick  = onAllowFileAccess,
-                enabled  = !viewModel.isProcessing
-            ) {
-                Icon(Icons.Default.Search, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("Find keys automatically (allow file access)")
-            }
-        }
-        TextButton(
-            onClick  = onFindKeys,
-            enabled  = !viewModel.isProcessing
-        ) {
-            Icon(Icons.Default.Search, contentDescription = null)
-            Spacer(Modifier.width(6.dp))
-            Text("Search a folder instead")
-        }
-    }
 
     Spacer(Modifier.height(12.dp))
 
@@ -245,7 +230,7 @@ fun StepCards(
         title       = "2. Seed Database",
         description = when {
             !seedsLoaded                  -> "Optional — needed for seeded titles (seeddb.bin)"
-            viewModel.seedDbUri == null   -> "${viewModel.seedDbMap?.size} built-in seeds (tap to load a newer seeddb.bin)"
+            viewModel.seedDbUri == null   -> "${viewModel.seedDbMap?.size} built-in seeds · tap to add your own"
             else                          -> "${viewModel.seedDbMap?.size} seeds (built-in + your seeddb.bin)"
         },
         icon        = Icons.AutoMirrored.Filled.List,
@@ -282,7 +267,7 @@ fun StepCards(
         Column(Modifier.weight(1f)) {
             Text("Output Format", style = MaterialTheme.typography.titleSmall)
             Text(
-                if (viewModel.exportToCci) "Assemble as .cci (Citra / Azahar)"
+                if (viewModel.exportToCci) "Save as .cci"
                 else "Save as decrypted .cia",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -455,9 +440,10 @@ fun StepCard(
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
                     description,
-                    style   = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    color   = MaterialTheme.colorScheme.onSurfaceVariant
+                    style    = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color    = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
