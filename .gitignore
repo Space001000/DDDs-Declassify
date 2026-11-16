@@ -30,3 +30,8 @@ seeddb.bin
 # System files
 .DS_Store
 Thumbs.db
+
+# Release signing (never commit)
+keystore.properties
+*.jks
+*.keystore

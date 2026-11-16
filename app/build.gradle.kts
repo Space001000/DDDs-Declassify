@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -20,10 +22,31 @@ android {
         }
     }
 
+    // Release signing: keystore.properties (gitignored) or env vars (for CI).
+    val keystoreProps = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun signingValue(key: String, env: String): String? =
+        keystoreProps.getProperty(key) ?: System.getenv(env)
+
+    signingConfigs {
+        val storePath = signingValue("storeFile", "DDDEC_KEYSTORE")
+        if (storePath != null) {
+            create("release") {
+                storeFile = file(storePath)
+                storePassword = signingValue("storePassword", "DDDEC_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "DDDEC_KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "DDDEC_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
